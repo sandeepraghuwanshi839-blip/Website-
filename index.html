@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Live Jewellery Try-On</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0d0d0f;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Arial}
+.app{max-width:560px;margin:auto;min-height:100vh;background:#151518}
+header{padding:15px 17px;border-bottom:1px solid #29292e}.title{font-size:21px;font-weight:800}.sub{font-size:12px;color:#a5a5ad;margin-top:2px}
+.stage{position:relative;background:#000;width:100%;aspect-ratio:3/4;overflow:hidden}
+video{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1)}
+canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;transform:scaleX(-1)}
+.product{position:absolute;left:50%;top:10px;transform:translateX(-50%);background:#0009;border:1px solid #444;padding:7px 11px;border-radius:20px;font-size:12px}
+.controls{padding:13px;display:grid;gap:9px}.row{display:flex;gap:8px}.btn{flex:1;min-height:46px;border:1px solid #3a3a40;background:#29292e;color:#fff;border-radius:11px;font-size:15px;font-weight:700}.active{background:#7c5cff;border-color:#7c5cff}.status{text-align:center;color:#b9b9c2;font-size:12px;padding:3px}.note{font-size:11px;color:#777;text-align:center}
+</style>
+</head>
+<body>
+<div class="app">
+<header><div class="title">✨ Live Jewellery Try-On</div><div class="sub">Real-time face tracking prototype</div></header>
+<div class="stage">
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+<div class="product" id="product">Earrings • Gold</div>
+</div>
+<div class="controls">
+<div class="row">
+<button class="btn active" data-type="earrings">✨ Earrings</button>
+<button class="btn" data-type="necklace">📿 Necklace</button>
+<button class="btn" data-type="both">💎 Both</button>
+</div>
+<div class="row">
+<button class="btn active" id="start">📷 Start Live Try-On</button>
+<button class="btn" id="stop">⏹ Stop</button>
+</div>
+<div class="status" id="status">Start दबाकर camera permission दें.</div>
+<div class="note">Camera processing browser में होता है; यह prototype server पर photo upload नहीं करता.</div>
+</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script>
+const video=document.getElementById('video'),canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+const status=document.getElementById('status'),product=document.getElementById('product');
+let stream=null, running=false, type='earrings', cam=null;
+
+function setType(t){
+ type=t; document.querySelectorAll('[data-type]').forEach(b=>b.classList.toggle('active',b.dataset.type===t));
+ product.textContent=t==='earrings'?'Earrings • Gold':t==='necklace'?'Necklace • Gold':'Earrings + Necklace';
+}
+document.querySelectorAll('[data-type]').forEach(b=>b.onclick=()=>setType(b.dataset.type));
+
+function resize(){canvas.width=video.videoWidth||600;canvas.height=video.videoHeight||800}
+function p(l){return {x:l.x*canvas.width,y:l.y*canvas.height}}
+function drawEarring(x,y,s,angle,flip){
+ ctx.save();ctx.translate(x,y);ctx.rotate(angle);
+ ctx.scale(flip?-1:1,1);
+ const g=ctx.createLinearGradient(-s,0,s,0);g.addColorStop(0,'#9b6b10');g.addColorStop(.45,'#ffe37a');g.addColorStop(1,'#b47b16');
+ ctx.strokeStyle=g;ctx.lineWidth=Math.max(3,s*.11);ctx.shadowColor='#0009';ctx.shadowBlur=s*.15;
+ ctx.beginPath();ctx.arc(0,s*.48,s*.48,Math.PI*0.1,Math.PI*1.9);ctx.stroke();
+ ctx.fillStyle='#ffe37a';ctx.beginPath();ctx.arc(0,s*1.02,s*.16,0,Math.PI*2);ctx.fill();
+ ctx.restore()
+}
+function drawNecklace(cx,cy,w,angle){
+ ctx.save();ctx.translate(cx,cy);ctx.rotate(angle);
+ ctx.strokeStyle='#e6bd48';ctx.lineWidth=Math.max(4,w*.035);
+ ctx.beginPath();ctx.arc(0,0,w*.50,0.18*Math.PI,0.82*Math.PI);ctx.stroke();
+ ctx.fillStyle='#f6d86a';ctx.beginPath();ctx.moveTo(0,w*.5+14);ctx.lineTo(12,w*.5+28);ctx.lineTo(0,w*.5+42);ctx.lineTo(-12,w*.5+28);ctx.closePath();ctx.fill();
+ ctx.restore()
+}
+
+const faceMesh=new FaceMesh({locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+faceMesh.setOptions({maxNumFaces:1,refineLandmarks:true,minDetectionConfidence:.55,minTrackingConfidence:.55});
+faceMesh.onResults(results=>{
+ resize();ctx.clearRect(0,0,canvas.width,canvas.height);
+ const lm=results.multiFaceLandmarks?.[0]; if(!lm){status.textContent='Face नहीं मिला — चेहरा camera के सामने रखें.';return;}
+ // Approximate ear anchors using stable outer-face landmarks.
+ const left=p(lm[234]), right=p(lm[454]), forehead=p(lm[10]), chin=p(lm[152]);
+ const dx=right.x-left.x,dy=right.y-left.y,dist=Math.hypot(dx,dy),ang=Math.atan2(dy,dx);
+ const nx=dist*.12, ey=dist*.18;
+ const lx=left.x+nx*Math.cos(ang), ly=left.y+nx*Math.sin(ang);
+ const rx=right.x-nx*Math.cos(ang), ry=right.y-nx*Math.sin(ang);
+ if(type==='earrings'||type==='both'){drawEarring(lx,ly,Math.max(18,dist*.095),ang,true);drawEarring(rx,ry,Math.max(18,dist*.095),ang,false)}
+ if(type==='necklace'){
+   drawNecklace((left.x+right.x)/2, chin.y-dist*.02, dist*.58, ang);
+ } else if(type==='both'){
+   drawNecklace((left.x+right.x)/2, chin.y-dist*.02, dist*.58, ang);
+ }
+ status.textContent='Live tracking • Head move करके देखें';
+});
+
+async function start(){
+ if(running)return;
+ try{
+   stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:720},height:{ideal:960}},audio:false});
+   video.srcObject=stream; running=true;
+   const camera=new Camera(video,{onFrame:async()=>{if(running)await faceMesh.send({image:video})},width:720,height:960});
+   cam=camera;camera.start();
+   status.textContent='Camera शुरू हो रहा है…';
+ }catch(e){status.textContent='Camera permission/secure browser access required.'}
+}
+function stop(){running=false;if(cam&&cam.stop)cam.stop();if(stream)stream.getTracks().forEach(t=>t.stop());ctx.clearRect(0,0,canvas.width,canvas.height);status.textContent='Stopped.'}
+document.getElementById('start').onclick=start;document.getElementById('stop').onclick=stop;
+</script>
+</body>
+</html>
